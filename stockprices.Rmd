@@ -1,0 +1,846 @@
+---
+title: "Stock analysis"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    css: styles-dark.css
+runtime: shiny
+---
+
+<!--Include all the necessary libraries, functions and packages-->
+
+```{r setup, include=FALSE, message=FALSE}
+library(flexdashboard)
+library(shiny)
+library(shinyWidgets)
+library(shinythemes)
+library(plotly)
+library(tidyverse)
+library(tidyquant)
+library(lubridate)
+library(forecast)
+source("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Coding for Data Science and Data Management/R module/Labs/MyDashboards/Stocks/myutils.R")
+source("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Coding for Data Science and Data Management/R module/Labs/rcoding-labs-master/R/packages.R")
+```
+
+<!-----------------------AUTHENTICATION PANEL---------------------------------->
+
+```{r auth}
+auth <- data.frame(user="dse", password = "rproject")
+write.csv(auth,"C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Coding for Data Science and Data Management/R module/Labs/MyDashboards/Stocks/auth.txt", row.names = FALSE )
+credentials <- read.csv("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Coding for Data Science and Data Management/R module/Labs/MyDashboards/Stocks/auth.txt")
+shinymanager::auth_ui(id = "auth")
+auth <- shiny::callModule(
+  module = shinymanager::auth_server,
+  id = "auth",
+  check_credentials = shinymanager::check_credentials(credentials)
+)
+```
+
+<!------------Gather the data from yahoo finance and tidy up------------------->
+
+```{r}
+tickers <- sort(c("AMZN", "AAPL","FB","TSLA","WMT"))
+
+# Nasdaq100 and SP500
+benchmarks <- c("^NDX", "^GSPC")     #SP500 approx. the market
+
+prices <- tq_get(tickers, 
+                 get  = "stock.prices",
+                 from = today()-months(36),
+                 to   = today(),
+                 complete_cases = F) %>% 
+  select(date, everything()) %>% 
+  as_tibble()%>% 
+  mutate(volume_mln = volume / 1000000) %>% 
+  mutate(sales_mln = ((high +low)/2)*(volume_mln)) %>% 
+  group_by(symbol) %>% 
+  arrange(date)  %>% 
+## .[order(.$date),] %>% 
+  ungroup()
+
+
+bench <- tq_get(benchmarks,
+                get  = "stock.prices",
+                from = today()-months(36),
+                to   = today()) %>%
+  select(date, everything()) %>%
+  as_tibble() %>% 
+  mutate(volume_mln = volume / 1000000) %>% 
+  mutate(sales_mln = ((high +low)/2)*(volume_mln)) %>% 
+  group_by(symbol) %>% 
+  arrange(date)  %>% 
+## .[order(.$date),] %>% 
+  ungroup()
+
+#final processed data we are using from now on
+data <- prices %>% 
+  rbind(bench)
+
+```
+
+
+<!------------------------------------------------------------------------------
+----------------------------- DASHBOARD-----------------------------------------
+------------------------------------------------------------------------------->
+
+<!------------------------------------------------------------------------------
+---------------------------------- PAGE 1 --------------------------------------
+------------------------------------------------------------------------------->
+
+# Stock prices
+<!------------------------------------------------------------------------------
+----------------------------------SIDEBAR---------------------------------------
+------------------------------------------------------------------------------->
+
+<!-------------------- to display interactive buttons-------------------------->
+
+## Column {.sidebar}
+
+```{r}
+
+useShinyjs(rmd = TRUE) # use Shiny JavaScript to allow delay on buttons
+
+#selecting a date range
+dateRangeInput(
+  inputId = "date_range",
+  label = h4("Date Range:"),
+  start = max(unique(data$date))-months(3),
+  end = max(unique(data$date)),
+  min = min(unique(data$date)),
+  max = max(unique(data$date))
+)
+
+#selecting the securities
+pickerInput(
+   inputId = "ticker",
+   label = "Company", 
+   choices = c( "Amazon" =  unique(data$symbol)[2],
+     "Apple" = unique(data$symbol)[1],
+     "Facebook" = unique(data$symbol)[3],
+     "Tesla" = unique(data$symbol)[4],
+     "Walmart" = unique(data$symbol)[5]
+      ),
+   choicesOpt = list(
+     icon = c(
+       "glyphicon-gift",
+       "glyphicon-apple",
+       "glyphicon-thumbs-up",
+       "glyphicon-cog",
+       "glyphicon-shopping-cart"
+     )
+   ),
+   selected = unique(data$symbol)[1:5],
+   options = list(
+      `actions-box` = TRUE), 
+    multiple = TRUE
+)
+
+#Selecting whether to display an index or not
+awesomeRadio(
+   inputId = "index",
+   label = "Index:",
+    choices = c(
+      "NASDAQ" = unique(data$symbol)[6],
+      "SP500" = unique(data$symbol)[7],
+      "None"),
+   selected = "None"
+)
+
+
+br() # break rule
+hr() # horizontal rule
+br() # break rule
+
+
+#Forecast mode
+h4("Forecast Mode")
+switchInput(
+  inputId = "forecast_mode",
+  value = FALSE,
+  onStatus = "success",
+  offStatus = "danger",
+  onLabel = "On",
+  offLabel = "Off",
+  handleWidth = 80,
+  labelWidth  = 80,
+  inline = TRUE,
+  width = "150px"
+)
+
+#what happens if forecast mode is on?
+conditionalPanel(
+  condition = "input.forecast_mode == 1",
+  numericInput(
+    inputId = "n_future",
+    label = "Forecast Horizon",
+    value = 15,
+    min = 1
+  ),
+ pickerInput(
+   inputId = "tickerforecast",
+   label = "Company", 
+   choices = c( "Amazon" =  unique(data$symbol)[2],
+     "Apple" = unique(data$symbol)[1],
+     "Facebook" = unique(data$symbol)[3],
+     "Tesla" = unique(data$symbol)[4],
+     "Walmart" = unique(data$symbol)[5],
+     "NASDAQ" = unique(data$symbol)[6],
+     "SP500" = unique(data$symbol)[7]
+      ),
+   choicesOpt = list(
+     icon = c(
+       "glyphicon-gift",
+       "glyphicon-apple",
+       "glyphicon-thumbs-up",
+       "glyphicon-cog",
+       "glyphicon-shopping-cart"
+     )
+   ),
+   selected = unique(data$symbol)[1],
+   options = list(
+      `actions-box` = TRUE,
+      style = "btn-success"), 
+    multiple = FALSE
+)
+)
+
+observeEvent(eventExpr = input$forecast_mode, {
+  delay(300, click(id = "apply"))
+}, once = TRUE)
+
+
+br() # break rule
+hr() # horizontal rule
+br() # break rule
+
+
+#reset and apply button
+actionButton(inputId = "apply", label = "Visualize", icon = icon("play"))
+actionButton(inputId = "reset", label= "Reset", icon = icon("sync"))
+
+#reactivity over the reset buttons
+observeEvent(eventExpr = input$reset, handlerExpr = {
+  
+ updatePickerInput(
+    session = session,
+    inputId = "ticker",
+    selected = unique(data$symbol)[1:5]
+  )
+
+  updateDateRangeInput(
+    session = session,
+    inputId = "date_range",
+    start =  max(unique(data$date))-months(3),
+    end = max(unique(data$date))
+  )
+
+  updateAwesomeRadio(
+     session = session,
+     inputId = "index",
+     selected = "None"
+  )
+   
+ updateSwitchInput(
+    session = session,
+    inputId = "forecast_mode",
+    value = FALSE
+  )
+
+  updateNumericInput(
+    session = session,
+    inputId = "n_future",
+    value = 12
+  )
+
+shinyjs::delay(ms = 300, expr = {shinyjs::click(id = "apply")})
+
+})
+
+```
+
+<!-------Create a reactive object, the data filtered depending on inputs------->
+
+```{r}
+data_plot <- eventReactive(eventExpr = c(input$index, input$apply),
+                            valueExpr = {
+                              data %>% 
+                                 filter(between(date, input$date_range[1], input$date_range[2])) %>% 
+                                  filter(symbol %in% c(input$ticker, input$index))
+                            })
+```
+
+
+<!------------------------------------------------------------------------------
+-------------------------------- VALUE BOXES -----------------------------------
+------------------------------------------------------------------------------->
+
+<!------- Create the reactive data used to display values in the boxes -------->
+
+```{r}
+years <- round((length(prices$adjusted)/(250*length(tickers))),0)
+
+pfolio_data <- reactive({
+  prices %>% 
+     group_by(symbol) %>%
+  tq_transmute(select = adjusted,
+               mutate_fun = periodReturn,
+               period = "daily",
+               col_rename = "ret") %>% 
+    summarise(d_ret = mean(ret)) %>% 
+    mutate(wts = (1/length(input$ticker))) %>% 
+    mutate(annual_ret = (d_ret/years)*250) %>% 
+    mutate(annual_pfolio_ret = round((annual_ret %*% wts),4)) %>% 
+    ungroup()
+})
+```
+
+```{r}
+
+trend_data <- reactive ({
+  prices %>%
+  select(date,symbol,adjusted) %>%
+  filter(between(date, input$date_range[1], input$date_range[2]-1)) %>%
+  group_by(symbol) %>%
+  mutate(avg = mediapon(adjusted)) %>%
+  summarise(symbol = symbol, date = input$date_range[2], adjusted = adjusted, average = avg) %>%
+  mutate(diff = round((last(adjusted)- average)/100, 2)) %>%
+  mutate(label = str_glue("{round((last(adjusted)- average)/100, 2)} %")) %>%
+  ungroup()
+})
+```
+
+## Row {data-height="150"}
+
+### Portfolio
+
+```{r}
+
+renderValueBox({
+  valueBox(
+    value = str_glue("Expected annual portfolio return: {unique(pfolio_data()$annual_pfolio_ret)*100} %"),
+    caption = "Equally distributed portfolio expected retun",
+    icon = "glyphicon-usd",
+    color = ifelse(pfolio_data()$annual_pfolio_ret < 0.1, "danger", "success")
+  )
+})
+
+```
+
+## Row {data-height="150"}
+
+### AAPL_Trend
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = unique(trend_data()$label)[1],
+    caption = "AAPL_Trend",
+    icon = case_when(
+    unique(trend_data()$diff)[1]< 0  ~ "glyphicon-arrow-down",
+    unique(trend_data()$diff)[1] > 0.5  ~ "glyphicon-arrow-up",
+    TRUE ~ "glyphicon-resize-horizontal"
+    ),
+     color = case_when(
+    unique(trend_data()$diff)[1]< 0 ~ "danger",
+    unique(trend_data()$diff)[1] >0.5  ~ "success",
+    TRUE ~ "warning"
+    )
+  )
+})
+```
+
+### AMZN_Trend
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = unique(trend_data()$label)[2],
+    caption = "AMZN_Trend",
+     icon = case_when(
+    unique(trend_data()$diff)[2]< 0  ~ "glyphicon-arrow-down",
+    unique(trend_data()$diff)[2] > 0.5  ~ "glyphicon-arrow-up",
+    TRUE ~ "glyphicon-resize-horizontal"
+    ),
+     color = case_when(
+    unique(trend_data()$diff)[2]< 0 ~ "danger",
+    unique(trend_data()$diff)[2] >0.5  ~ "success",
+    TRUE ~ "warning"
+    )
+  )
+})
+```
+
+### FB_Trend
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = unique(trend_data()$label)[3],
+    caption = "FB_Trend",
+     icon = case_when(
+    unique(trend_data()$diff)[3]< 0  ~ "glyphicon-arrow-down",
+    unique(trend_data()$diff)[3] > 0.5  ~ "glyphicon-arrow-up",
+    TRUE ~ "glyphicon-resize-horizontal"
+    ),
+     color = case_when(
+    unique(trend_data()$diff)[3]< 0 ~ "danger",
+    unique(trend_data()$diff)[3] >0.5  ~ "success",
+    TRUE ~ "warning"
+    )
+  )
+})
+```
+
+### TSLA_Trend
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = unique(trend_data()$label)[4],
+    caption = "TSLA_Trend",
+     icon = case_when(
+    unique(trend_data()$diff)[4]< 0  ~ "glyphicon-arrow-down",
+    unique(trend_data()$diff)[4] > 0.5  ~ "glyphicon-arrow-up",
+    TRUE ~ "glyphicon-resize-horizontal"
+    ),
+     color = case_when(
+    unique(trend_data()$diff)[4]< 0 ~ "danger",
+    unique(trend_data()$diff)[4] >0.5  ~ "success",
+    TRUE ~ "warning"
+    )
+  )
+})
+```
+
+### WMT_Trend
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = unique(trend_data()$label)[5],
+    caption = "WMT_Trend",
+    icon = case_when(
+    unique(trend_data()$diff)[5]< 0  ~ "glyphicon-arrow-down",
+    unique(trend_data()$diff)[5] > 0.5  ~ "glyphicon-arrow-up",
+    TRUE ~ "glyphicon-resize-horizontal"
+    ),
+     color = case_when(
+    unique(trend_data()$diff)[5]< 0 ~ "danger",
+    unique(trend_data()$diff)[5] >0.5  ~ "success",
+    TRUE ~ "warning"
+    )
+  )
+})
+```
+
+
+<!------------------------------------------------------------------------------
+-------------------------------- ADJ CLOSE PLOT --------------------------------
+------------------------------------------------------------------------------->
+
+## Row {data-height="700"}
+
+### Adjusted Close
+
+```{r}
+#reactive object for the forecast mode
+data_forecast <- eventReactive(
+  eventExpr = input$apply,
+  valueExpr = {
+  data %>%
+    filter(between(date, input$date_range[1], input$date_range[2])) %>% 
+    filter(symbol %in% input$tickerforecast) 
+})
+
+time_plot_predict <- eventReactive(eventExpr = input$apply, {
+  if (input$forecast_mode) {
+    data_forecast() %>%
+      generate_forecast(n_future = input$n_future, seed = 123)
+  }
+})
+```
+
+```{r}
+
+#display the time series or the forecast based on the input of "forecast_mode"
+output$plotly_F <- renderPlotly({
+
+  if (input$forecast_mode) {
+    p <- time_plot_predict() %>% plot_forecast()
+  } else {
+    p <- data_plot() %>% plot_time_series_adj()
+  }
+  
+})
+
+plotlyOutput(outputId = "plotly_F")
+```
+
+<!------------------------------------------------------------------------------
+---------------------------------- PAGE 2 --------------------------------------
+------------------------------------------------------------------------------->
+
+# Sales
+
+<!------------------------------------------------------------------------------
+----------------------------------SIDEBAR---------------------------------------
+------------------------------------------------------------------------------->
+
+<!-------------------- to display interactive buttons-------------------------->
+
+## Column {.sidebar}
+
+```{r}
+useShinyjs(rmd = TRUE) # use Shiny JavaScript to allow delay on buttons
+
+#selecting a date range
+dateRangeInput(
+  inputId = "date_range_sales",
+  label = h4("Date Range:"),
+  start = max(unique(data$date))-months(3),
+  end = max(unique(data$date)),
+  min = min(unique(data$date)),
+  max = max(unique(data$date))
+)
+
+#selecting the securities
+pickerInput(
+   inputId = "ticker_sales",
+   label = "Company", 
+   choices = c( "Amazon" =  unique(data$symbol)[2],
+     "Apple" = unique(data$symbol)[1],
+     "Facebook" = unique(data$symbol)[3],
+     "Tesla" = unique(data$symbol)[4],
+     "Walmart" = unique(data$symbol)[5]
+      ),
+   choicesOpt = list(
+     icon = c(
+       "glyphicon-gift",
+       "glyphicon-apple",
+       "glyphicon-thumbs-up",
+       "glyphicon-cog",
+       "glyphicon-shopping-cart"
+     )
+   ),
+   selected = unique(data$symbol)[1:5],
+   options = list(
+      `actions-box` = TRUE), 
+    multiple = TRUE
+)
+
+#select wheter to show an index or not
+awesomeRadio(
+   inputId = "index_sales",
+   label = "Index:",
+    choices = c(
+      "NASDAQ" = unique(data$symbol)[6],
+      "SP500" = unique(data$symbol)[7],
+      "None"),
+   selected = "None"
+)
+
+
+br() # break rule
+hr() # horizontal rule
+br() # break rule
+
+
+#Forecast mode
+h4("Forecast Mode")
+switchInput(
+  inputId = "forecast_mode_sales",
+  value = FALSE,
+  onStatus = "success",
+  offStatus = "danger",
+  onLabel = "On",
+  offLabel = "Off",
+  handleWidth = 80,
+  labelWidth  = 80,
+  inline = TRUE,
+  width = "150px"
+)
+
+#what happens if the forecast mode is on?
+conditionalPanel(
+  condition = "input.forecast_mode_sales == 1",
+  numericInput(
+    inputId = "n_future_sales",
+    label = "Forecast Horizon",
+    value = 15,
+    min = 1
+  ),
+  pickerInput(
+     inputId = "tickerforecast_sales",
+     label = "Company", 
+     choices = c( "Amazon" =  unique(data$symbol)[2],
+       "Apple" = unique(data$symbol)[1],
+       "Facebook" = unique(data$symbol)[3],
+       "Tesla" = unique(data$symbol)[4],
+       "Walmart" = unique(data$symbol)[5],
+       "NASDAQ" = unique(data$symbol)[6],
+       "SP500" = unique(data$symbol)[7]
+        ),
+     choicesOpt = list(
+       icon = c(
+         "glyphicon-gift",
+         "glyphicon-apple",
+         "glyphicon-thumbs-up",
+         "glyphicon-cog",
+         "glyphicon-shopping-cart"
+       )
+     ),
+     selected = unique(data$symbol)[1],
+     options = list(
+        `actions-box` = TRUE,
+        style = "btn-success"), 
+      multiple = FALSE,
+    )
+)
+
+
+observeEvent(eventExpr = input$forecast_mode_sales, {
+  delay(300, click(id = "apply_sales"))
+}, once = TRUE)
+
+
+br() # break rule
+hr() # horizontal rule
+br() # break rule
+
+
+#reset and apply button
+actionButton(inputId = "apply_sales", label = "Visualize", icon = icon("play"))
+actionButton(inputId = "reset_sales", label= "Reset", icon = icon("sync"))
+
+
+observeEvent(eventExpr = input$reset_sales, handlerExpr = {
+  
+ updatePickerInput(
+    session = session,
+    inputId = "ticker_sales",
+    selected = unique(data$symbol)[1:5]
+                 
+)
+
+updateDateRangeInput(
+  session = session,
+  inputId = "date_range_sales",
+  start =  max(unique(data$date))-months(3),
+  end = max(unique(data$date))
+)
+
+updateAwesomeRadio(
+   session = session,
+   inputId = "index",
+   selected = "None"
+)
+ 
+ updateSwitchInput(
+    session = session,
+    inputId = "forecast_mode_sales",
+    value = FALSE
+  )
+
+  updateNumericInput(
+    session = session,
+    inputId = "n_future_sales",
+    value = 12
+  )
+
+shinyjs::delay(ms = 300, expr = {shinyjs::click(id = "apply_sales")})
+
+})
+
+```
+
+<!-------Create a reactive object, the data filtered depending on inputs------->
+
+```{r}
+data_plot_sales <- eventReactive(eventExpr = c(input$index_sales,input$apply_sales),
+                            valueExpr = {
+                              data %>% 
+                                 filter(between(date, input$date_range_sales[1], input$date_range_sales[2])) %>% 
+                                  filter(symbol %in% c(input$ticker_sales, input$index_sales))
+                            })
+```
+
+
+<!------------------------------------------------------------------------------
+-------------------------------- VALUE BOXES -----------------------------------
+------------------------------------------------------------------------------->
+
+<!------- Create the reactive data used to display values in the boxes -------->
+
+```{r}
+summary_data_sales <- reactive ({
+  data_plot_sales() %>%
+    summarize(
+      mean_vol_mln = mean(volume_mln),
+      sales_b = mean(sales_mln / 1000)
+    ) %>%
+    mutate(mean_vol_mln = scales::number(mean_vol_mln, suffix = "MLN"),
+           sales_b2 = scales::number(sales_b, prefix = "$", suffix = "B"))
+})
+```
+
+## Row {data-height="150"}
+
+### Volume
+
+```{r}
+renderValueBox({
+  valueBox(
+    value = summary_data_sales()$mean_vol_mln,
+    caption = "Volume",
+    icon = "glyphicon-signal",
+    color = "primary"
+  )
+})
+```
+
+### Sales
+
+```{r}
+
+renderValueBox({
+  valueBox(
+    value = summary_data_sales()$sales_b2,
+    caption = "Financial flow",
+    icon = "glyphicon-usd",
+    color = ifelse(summary_data_sales()$sales_b < 10, "danger", "success")
+
+  )
+})
+```
+
+
+<!------------------------------------------------------------------------------
+---------------------------------- SALES PLOT ----------------------------------
+------------------------------------------------------------------------------->
+
+## Row {data-height="850"}
+
+### Sales (mln)
+
+```{r}
+#reactive object for the forecast mode 
+data_forecast_sales <- eventReactive(
+  eventExpr = input$apply_sales,
+  valueExpr = {
+  data %>%
+    filter(between(date, input$date_range_sales[1], input$date_range_sales[2])) %>% 
+    filter(symbol %in% input$tickerforecast_sales) 
+})
+
+#useful if you want to operate upon different time units. In our case it is "day" by default, not modifiable
+# time_plot <- reactive({
+#   data_plot() %>%
+#       aggregate_time_series(., time_unit = "day")
+# })
+
+time_plot_predict_sales <- eventReactive(eventExpr = input$apply_sales, {
+  if (input$forecast_mode_sales) {
+    data_forecast_sales() %>%
+      generate_forecast_sales(n_future_sales = input$n_future_sales, seed = 123)
+  }
+})
+```
+
+```{r}
+#display the time series or the forecast based on the input of "forecast_mode_sales"
+
+output$plotly_FF <- renderPlotly({
+  
+  if (input$forecast_mode_sales) {
+    p <- time_plot_predict_sales() %>% plot_forecast_sales()
+  } else {
+    p <- data_plot_sales() %>% plot_time_series_sales()
+  }
+  
+})
+
+plotlyOutput(outputId = "plotly_FF")
+```
+
+
+<!------------------------------------------------------------------------------
+---------------------------------- PAGE 3 --------------------------------------
+------------------------------------------------------------------------------->
+
+# Candlestick
+
+
+<!------------------------------------------------------------------------------
+----------------------------------SIDEBAR---------------------------------------
+------------------------------------------------------------------------------->
+
+<!-------------------- to display interactive buttons-------------------------->
+
+## Column {.sidebar}
+
+```{r}
+#select a time range
+dateRangeInput(
+  inputId = "date_range2",
+  label = h4("Date Range:"),
+  start = max(unique(prices$date))-months(3),
+  end = max(unique(prices$date)),
+  min = min(unique(prices$date)),
+  max = max(unique(prices$date))
+)
+
+#select the security (no multiple selection allowed)
+pickerInput(
+  inputId = "ticker2",
+   label = "Select stock:", 
+   choices = c( "Amazon" =  unique(data$symbol)[2],
+     "Apple" = unique(data$symbol)[1],
+     "Facebook" = unique(data$symbol)[3],
+     "Tesla" = unique(data$symbol)[4],
+     "Walmart" = unique(data$symbol)[5]
+      ),
+   choicesOpt = list(
+     icon = c(
+       "glyphicon-gift",
+       "glyphicon-apple",
+       "glyphicon-thumbs-up",
+       "glyphicon-cog",
+       "glyphicon-shopping-cart"
+     )
+   ),
+   selected = unique(data$symbol)[1],
+  multiple = FALSE
+)
+```
+
+```{r}
+prices_plot_candlestick <- reactive({
+  prices %>%
+    filter(symbol %in% input$ticker2) %>%
+    filter(between(date, input$date_range2[1], input$date_range2[2])) 
+})
+```
+
+
+<!------------------------------------------------------------------------------
+------------------------------- CANDLESTICK PLOT -------------------------------
+------------------------------------------------------------------------------->
+
+## Row {data-heigth = 900}
+
+### Candlestick
+
+```{r}
+output$plotly_3 <- renderPlotly({
+  
+  fig <- prices_plot_candlestick() %>% 
+    plot_ly(x = ~date, type="candlestick", open = ~open, close = ~close, high = ~high, low = ~low)
+  fig <- fig %>% 
+    layout(title = NULL)
+  fig
+ })
+
+plotlyOutput(outputId = "plotly_3")
+```
